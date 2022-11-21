@@ -1,0 +1,250 @@
+---
+title: "Stage 3 of Data Maturity"
+output: slidy_presentation
+date: '2022-03-07'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+## Step 1 Understand the Business Problem 
+
+$$\\[0.5in]$$
+- Puppy Toys Inc. has been running marketing campaigns but the conversion rates are low. 
+
+$$\\[1in]$$
+
+- As a results the cost per conversion is very high. 
+
+$$\\[1in]$$
+
+- The business would like to refine the target audience to exclude leads that have a low likelihood of purchasing. 
+
+## Step 2  Specify your objectives
+$$\\[0.2in]$$
+- Reduce cost per sale without adversely impact total sales $$\\[0.2in]$$
+- There are many ways to achieve this but we are going to focus on how we can leverage a purchase propensity model $$\\[0.2in]$$
+- We will attempt to exclude low potential leads from our customer target list $$\\[0.2in]$$
+- It is rare that your first modeling attempt produces a robust high performance model $$\\[0.2in]$$
+- But we shall observe that we can still extract value from low performing models $$\\[0.2in]$$
+
+
+## Step 3a Load packages
+```{r load-packages, echo=TRUE}
+
+#Load libraries
+library(dplyr)  # For dataframe manipulation                  
+library(funModeling) #For exploratory analysis
+library(caret) #For classification and regression
+library(pROC) #For ROC curve analysis
+library(InformationValue) #For model performance calculations
+library(caTools) #For model performance calculations
+library(pscl) #For model performance calculations
+library(plotrix) #For plotting shapes
+
+```
+
+## Step 3b Load and explore data 
+``` {r echo = TRUE}
+
+#Load data 
+data <- read.csv("customer_data.csv") 
+#How much data do we have?
+nrow(data)
+ncol(data)
+status(data)
+
+quality = data_integrity(data) 
+
+print(quality)
+
+
+#plot numerical variables
+plot_num(data)
+
+# Plot categorical variables
+cat_vars <- c("Dog_group" , "marital_status" ,  "Owner_location" ,  "Previous_Purchase" , "Gender" , "Preferred_Toy_size" ,"Owner_age_bracket")
+cat_data = data[cat_vars]
+
+cross_plot(data=data, input=cat_vars, target="Purchase")
+
+
+#Correlation with outcome
+correlation_table(data,"Purchase")
+
+
+```
+
+## Step 4 Create train and test dataset
+``` {r echo = TRUE}
+split <- sample.split(data, SplitRatio = 0.8)
+train <- subset(data, split == "TRUE") 
+test <- subset(data, split == "FALSE") 
+```
+
+#Step 4b Downsample training set (if necessary)
+``` {r echo = TRUE}
+train$Purchase <- factor(train$Purchase)
+
+traindown <- downSample(x=train[,-ncol(train)],
+                      y=train$Purchase, yname = "Purchase")
+table(traindown$Purchase)
+```
+## Step 5a - Select appropriate modeling approach
+- Recall that our objective is to slice off the least likely purchasers from our target list 
+- So we want to score our target list 
+- Our scoring is based on labelled data with a binary outcome Purchaser [0,1] 
+
+```{r echo=FALSE, out.width='65%'}
+knitr::include_graphics('./ml_algo_choice.png')
+```
+
+## Step 5b - Create a model for logistics using the training dataset
+``` {r echo = TRUE}
+model = glm(Purchase~.,traindown , family="binomial")     
+summary(model)   
+```
+
+
+## Step 6 - Evaluate Model
+``` {r echo = TRUE}
+test_prob = predict(model, test, type = "response")
+
+test_roc = roc(test$Purchase ~ test_prob, plot = TRUE, print.auc = TRUE, color = "green")
+
+## Sensitivity: the ability to correctly identify positive cases
+## Specificity: ability to correctly identify negative cases
+## One of these is more important to us than the other? Which one do you think?
+
+as.numeric(test_roc$auc)
+
+#create confusion matrix
+#find optimal cutoff probability to use to maximize accuracy
+optimal <- optimalCutoff(test$Purchase, test_prob)[1]
+
+#create confusion matrix: how well was each outcome predicted?
+confusionMatrix(test$Purchase, test_prob)
+
+#pseudo R^2: proxy for the coefficient of determination for linear models with range 0 to 1 
+## It tells us how much better our model is than an intercept-only model 
+pR2(model)
+
+#Which variable are important?
+imp <- as.data.frame(varImp(model))
+imp <- data.frame(Variables = rownames(imp), Importance = imp$Overall)
+imp[order(imp$Importance,decreasing = T),]
+
+```
+
+## Step 7 Compare distribution of scores using histograms  
+``` {r echo = TRUE}
+
+#Get distribution of scores
+test$prob = predict(model, test, type = "response")
+test_purch <- subset(test, Purchase == "1")
+hg_purch <- hist(test_purch$prob)
+
+test_no_purch <- subset(test, Purchase == "0")
+hg_no_purch <- hist(test_no_purch$prob)
+
+## Compare distribution using histograms 
+plot(hg_no_purch,  col = 'red')
+plot(hg_purch , col = 'green',  add = TRUE)
+
+## We can also visualize these differences using a cumulative density function(CDF)
+## Recall that a CDF visualizes the percentage of the total that falls at or below a certain score. So it starts at 0% and peaks at 100%. 
+#calculate empirical CDF of data
+np = ecdf(test_no_purch$prob)
+p = ecdf(test_purch$prob)
+```
+
+## Compare using cumulative densities 
+``` {r echo = TRUE}
+plot(p, xlab='Purchase propensity', ylab='CDF', col ='green', do.points=FALSE, main = "CDFs of purchasers and non-purchasers") 
+
+# Vertical grid  
+axis(1,
+     at = seq(0, 1, by = 0.1),
+     tck = 1, lty = 2, col = "gray")
+
+# Horizontal grid
+axis(2,
+     at = seq(0, 1, by = 0.1),
+     tck = 1, lty = 2, col = "gray")
+
+#grid(nx = 10, ny = 10,
+#     lty = 2, col = "gray", lwd = 2)
+
+##purchase_cdfs <-
+  plot(np, xlab='Purchase propensity', ylab='CDF', col ='red', add = 'TRUE', verticals=TRUE, do.points=FALSE) 
+##purchase_cdfs
+draw.ellipse(x= c(0.5), y= c(0.5), c(0.4), c(0.1), border = 'blue', lwd = 1, angle = 75, lty=3 )
+```
+
+## Compare using Gain and Lift Curves: What is the concentration of purchasers in each decile? 
+``` {r echo = TRUE}
+  gain_lift(data=test, score='prob', target='Purchase')
+```
+
+## Step 8 a  Time to formulate our hypothesis as to how we can solve the business problem
+$$\\[0.5in]$$
+- Our model isn't great at identifying purchasers but it is pretty good at doing the opposite $$\\[0.5in]$$
+- So we can leverage our model to improve the quality of our target list by eliminating non-purchasers $$\\[0.5in]$$
+- But of course as there is the universal principle "No Free Lunch" i.e. as we eliminate non-purchasers based on scores, we also eliminate some purchasers$$\\[0.5in]$$
+- Depending on what your company's current short term goals are, giving up some purchasers may or may not be acceptable. Be sure to confirm where they stand.$$\\[0.5in]$$
+
+## Step 8b You could still win on all dimensions
+- In my experience, you can achieve this goal while maintaining and sometimes even increasing sales $$\\[0.1in]$$
+- Why? $$\\[0.1in]$$
+- Much of online advertising depends on some kind of bidding system. When you set up a campaign, you choose some parameters to optimize your reach and conversion. An example is setting a bid cap i.e. the maximum amount you are willing to pay to reach a user. $$\\[0.1in]$$
+- High converting users are typically in higher demand and will as such go to the highest bidder who may not be you. $$\\[0.1in]$$
+- When you cut off a chunk of your targets, you can reach more higher quality users for the same budget by simpler bidding higher. $$\\[0.1in]$$
+- You could also increase impression count per reached user to increase conversion rate of the "on the fence" users. $$\\[0.1in]$$
+- A combination of these effects could lead to higher conversions (purchases) for the same budget despite having reached few people overall. $$\\[0.1in]$$
+- Amazing what you can do with a pretty basic model, right? 
+
+## Step 8c Back to our hypotheses 
+$$\\[0.5in]$$
+**Hypothesis:**  
+- We believe that we can increase our conversion rate from ~11% to ~15% by cutting out the bottom ~30% least-likely-to-buy targets from our list.  
+$$\\[0.5in]$$
+**Potential risks:**  
+- The optimization of our conversion rate may cost us up to ~10% of our conversions.   $$\\[0.5in]$$
+
+**Mitigation:**    
+- We will start with a 20% test to quantify the efficiency gains and any potential downside.  
+
+
+## Step 9 Setting up the test 
+To recap:  
+
+You got  to stage 3 of your data maturity journey by identifying and exploiting all low-hanging fruit through disciplined analysis and experimentation.
+
+Experimentation is the cleanest way to demonstrate causality and thereby de-risk decisions on further investment.  
+
+**How might you set up an experiment for our scenario?**  
+
+1. Decide on a score threshold that you will use a cut-off i.e. any user you target in your test group must score higher than that. Based on our CDF plot, let's enforce a 0.4 cutoff.  
+
+2. Split the target audience evenly into two groups. Let's assume you had 10,000 potential leads. You now have two groups of 5000 each. Let's call them group A and group B.  
+
+3. Score the users in group B and subset out the population that has a score greater than our threshold. Say this reduces group B to 3000 users. We call this new group the test group.  
+
+4. Select an equal size control group from group A i.e. a random selection of 3000.  
+
+5. Assign an equal marketing budget to each group.  
+
+6. Depending on your advertising channel you may need to choose a bidding strategy that is most likely to lead to maximum gains. Just be sure to use the same strategy in both groups.  
+
+7. Gather all available data across your entire customer funnel to perform comparisons and make a recommendation. 
+
+8. Continue to experiment with different thresholds until you are sure you have found an optimum
+
+## Visualization of experiment setup
+
+
+```{r echo=FALSE, out.width='50%'}
+knitr::include_graphics('./test_setup.png')
+```
+
